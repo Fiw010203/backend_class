@@ -1,7 +1,7 @@
 # Backend Setup Instructions
 ### 1. Clone the backend repo
 ```
-git clone https://github.com/your-org/backend-cw.git
+git clone https://github.com/Korrawit-aoongern/backend-cw
 cd backend-cw
 npm install
 ```
