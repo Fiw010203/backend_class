@@ -1,133 +1,140 @@
-import { Hono } from "hono"
+import { Hono } from "hono";
 
+type Env = {
+  DB: D1Database;
+};
 
-const getDb = (c: any) => c.env?.DB
-const auth = new Hono()
+const auth = new Hono<{ Bindings: Env }>();
+const getDb = (c: any) => c.env.DB;
+
+/* ================= HEALTH ================= */
+auth.get("/ping", (c) => c.text("pong"));
 
 /* ================= REGISTER ================= */
-auth.get("/ping", (c) => c.text("pong"))
-
 auth.post("/register", async (c) => {
   try {
     const { username, password, role, fullname, student_code } =
-      await c.req.json()
+      await c.req.json();
 
-    const db = getDb(c)
-    const uname = username?.trim()
+    const db = getDb(c);
+
+    const uname = username?.trim();
+    const pwd = password?.toString();
+    const r = role?.toLowerCase();
 
     /* ---------- validate ---------- */
-    if (!uname || !password || !role) {
-      return c.json({ message: "ข้อมูลไม่ครบ" }, 400)
+    if (!uname || !pwd || !r) {
+      return c.json({ message: "ข้อมูลไม่ครบ" }, 400);
     }
 
-    const r = role.toLowerCase()
     if (r !== "student" && r !== "teacher") {
-      return c.json({ message: "Role ไม่ถูกต้อง" }, 400)
+      return c.json({ message: "Role ไม่ถูกต้อง" }, 400);
     }
 
     if (r === "student") {
       if (!fullname || !student_code) {
-        return c.json(
-          { message: "กรุณากรอกข้อมูลนักศึกษาให้ครบ" },
-          400
-        )
+        return c.json({ message: "กรุณากรอกข้อมูลนักศึกษาให้ครบ" }, 400);
       }
     }
 
-    /* ---------- check duplicate username ---------- */
+    /* ---------- duplicate username ---------- */
     const exists = await db
       .prepare("SELECT id FROM users WHERE username = ?")
       .bind(uname)
-      .first()
+      .first();
 
     if (exists) {
-      return c.json({ message: "Username ซ้ำ" }, 400)
+      return c.json({ message: "Username ซ้ำ" }, 400);
     }
 
     /* ---------- insert users ---------- */
-    const userResult = await db
+    const result = await db
       .prepare(
         `INSERT INTO users (username, password, role)
-         VALUES (?, ?, ?)`
+         VALUES (?, ?, ?)`,
       )
-      .bind(uname, password, r)
-      .run()
+      .bind(uname, pwd, r)
+      .run();
 
-    const userId =
-      userResult.meta?.last_row_id ??
-      (userResult as any)?.lastInsertRowid
-
+    const userId = result.meta?.last_row_id;
     if (!userId) {
-      return c.json(
-        { message: "ไม่สามารถสร้างผู้ใช้ได้" },
-        500
-      )
+      return c.json({ message: "สร้างผู้ใช้ไม่สำเร็จ" }, 500);
     }
 
-    /* ---------- insert student profile ---------- */
+    /* ---------- insert students ---------- */
     if (r === "student") {
       await db
         .prepare(
           `INSERT INTO students (user_id, fullname, student_code)
-           VALUES (?, ?, ?)`
+           VALUES (?, ?, ?)`,
         )
         .bind(userId, fullname, student_code)
-        .run()
+        .run();
     }
 
     return c.json({
       success: true,
-      message: "สมัครสมาชิกสำเร็จ ✅"
-    })
+      message: "สมัครสมาชิกสำเร็จ ✅",
+    });
   } catch (err) {
-    console.error("REGISTER ERROR:", err)
-    return c.json(
-      { message: "สมัครไม่สำเร็จ: เกิดข้อผิดพลาด" },
-      500
-    )
+    console.error("REGISTER ERROR:", err);
+    return c.json({ message: "สมัครไม่สำเร็จ" }, 500);
   }
-})
+});
 
-/* ================= LOGIN ================= */
+/* ================= LOGIN (แก้แล้ว) ================= */
 auth.post("/login", async (c) => {
-  // parse and normalize
-  const body = await c.req.json().catch(() => ({}))
-  const uname = (body.username || "").toString().trim()
-  const pwd = (body.password || "").toString()
-
-  if (!uname || !pwd) {
-    return c.json({ success: false, message: "กรุณากรอก Username และ Password" }, 400)
-  }
-
-  const db = getDb(c)
-  if (!db) {
-    console.error("LOGIN ERROR: DB not available")
-    return c.json({ success: false, message: "Database not available" }, 500)
-  }
-
   try {
-    const user = await db
-      .prepare(
-        `SELECT id, username, role
-         FROM users
-         WHERE username = ? AND password = ?`
-      )
-      .bind(uname, pwd)
-      .first()
+    const { username, password } = await c.req.json();
 
-    if (!user) {
-      return c.json({ success: false, message: "Username หรือ Password ไม่ถูกต้อง" }, 401)
+    const uname = username?.trim();
+    const pwd = password?.toString();
+
+    if (!uname || !pwd) {
+      return c.json(
+        { success: false, message: "กรุณากรอก Username และ Password" },
+        400,
+      );
     }
 
-    // normalize role and return
-    user.role = (user.role || "").toString().toLowerCase()
+    const db = getDb(c);
 
-    return c.json({ success: true, user })
-  } catch (err: any) {
-    console.error("LOGIN ERROR:", err)
-    return c.json({ success: false, message: err?.message || "Login error" }, 500)
+    const user = await db
+      .prepare(
+        `
+        SELECT
+          u.id,
+          u.username,
+          u.role,
+          s.id AS student_id
+        FROM users u
+        LEFT JOIN students s ON u.id = s.user_id
+        WHERE u.username = ? AND u.password = ?
+      `,
+      )
+      .bind(uname, pwd)
+      .first();
+
+    if (!user) {
+      return c.json(
+        { success: false, message: "Username หรือ Password ไม่ถูกต้อง" },
+        401,
+      );
+    }
+
+    return c.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        student_id: user.role === "student" ? user.student_id : null,
+      },
+    });
+  } catch (err) {
+    console.error("LOGIN ERROR:", err);
+    return c.json({ success: false, message: "Login error" }, 500);
   }
-})
+});
 
-
-export default auth
+export default auth;

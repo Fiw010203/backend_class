@@ -10,80 +10,95 @@ const attendance = new Hono<{ Bindings: Env }>()
    👨‍🏫 เช็ครหัสที่ยังใช้งานอยู่
 ====================================================== */
 attendance.get("/active-code/:teacherId", async (c) => {
-  const teacherId = Number(c.req.param("teacherId"))
+  try {
+    const teacherId = Number(c.req.param("teacherId"))
 
-  const row = await c.env.DB
-    .prepare(`
-      SELECT code, expires_at
-      FROM attendance_code
-      WHERE teacher_id = ?
-      AND expires_at > datetime('now','+7 hours')
-      ORDER BY expires_at DESC
-      LIMIT 1
-    `)
-    .bind(teacherId)
-    .first()
+    const row = await c.env.DB
+      .prepare(`
+        SELECT id, code, expires_at
+        FROM attendance_session
+        WHERE teacher_id = ?
+        AND expires_at > datetime('now','+7 hours')
+        ORDER BY expires_at DESC
+        LIMIT 1
+      `)
+      .bind(teacherId)
+      .first()
 
-  if (!row) {
-    return c.json({ active: false })
+    if (!row) {
+      return c.json({ active: false })
+    }
+
+    return c.json({
+      active: true,
+      sessionId: row.id,
+      code: row.code,
+      expiresAt: row.expires_at
+    })
+  } catch (err) {
+    console.error(err)
+    return c.json({ message: "Internal Server Error" }, 500)
   }
-
-  return c.json({
-    active: true,
-    code: row.code,
-    expiresAt: row.expires_at
-  })
 })
 
 /* ======================================================
-   👨‍🏫 Generate Code (อาจารย์)
+   👨‍🏫 Generate Code
 ====================================================== */
 attendance.post("/generate-code", async (c) => {
-  const { teacherId } = await c.req.json()
-  const tid = Number(teacherId)
+  try {
+    const { teacherId } = await c.req.json()
+    const tid = Number(teacherId)
 
-  if (!Number.isFinite(tid)) {
-    return c.json({ message: "teacherId ไม่ถูกต้อง" }, 400)
-  }
+    if (!Number.isFinite(tid)) {
+      return c.json({ message: "teacherId ไม่ถูกต้อง" }, 400)
+    }
 
-  // 🔒 block ถ้ายังมี code ใช้งานอยู่
-  const active = await c.env.DB
-    .prepare(`
-      SELECT code, expires_at
-      FROM attendance_code
-      WHERE teacher_id = ?
-      AND expires_at > datetime('now','+7 hours')
-      LIMIT 1
-    `)
-    .bind(tid)
-    .first()
+    // 🔍 เช็คว่ามี session ที่ยังไม่หมดอายุไหม
+    const active = await c.env.DB
+      .prepare(`
+        SELECT id, code, expires_at
+        FROM attendance_session
+        WHERE teacher_id = ?
+        AND expires_at > datetime('now','+7 hours')
+        ORDER BY expires_at DESC
+        LIMIT 1
+      `)
+      .bind(tid)
+      .first()
 
-  if (active) {
-    return c.json(
-      {
+    if (active) {
+      return c.json({
         active: true,
+        sessionId: active.id,
         code: active.code,
         expiresAt: active.expires_at,
         message: "ยังมีรหัสที่ใช้งานอยู่"
-      },
-      409
-    )
+      })
+    }
+
+    // 🎲 สร้างรหัสใหม่
+    const code = Math.random()
+      .toString(36)
+      .substring(2, 7)
+      .toUpperCase()
+
+    const result = await c.env.DB
+      .prepare(`
+        INSERT INTO attendance_session (teacher_id, code, expires_at)
+        VALUES (?, ?, datetime('now','+7 hours','+5 minutes'))
+      `)
+      .bind(tid, code)
+      .run()
+
+    return c.json({
+      success: true,
+      sessionId: result.meta.last_row_id,
+      code
+    })
+  } catch (err) {
+    console.error("generate-code error:", err)
+    return c.json({ message: "Internal Server Error" }, 500)
   }
-
-  const code = Math.random()
-    .toString(36)
-    .substring(2, 7)
-    .toUpperCase()
-
-  await c.env.DB
-    .prepare(`
-      INSERT INTO attendance_code (code, teacher_id, expires_at)
-      VALUES (?, ?, datetime('now','+7 hours','+5 minutes'))
-    `)
-    .bind(code, tid)
-    .run()
-
-  return c.json({ success: true, code })
 })
 
 /* ======================================================
@@ -98,93 +113,63 @@ attendance.post("/checkin", async (c) => {
       return c.json({ message: "ข้อมูลไม่ถูกต้อง" }, 400)
     }
 
-    // 🔍 ตรวจว่านักศึกษามีจริง
-    const student = await c.env.DB
+    // 🔎 หา session จาก code
+    const session = await c.env.DB
       .prepare(`
         SELECT id
-        FROM students
-        WHERE id = ?
-      `)
-      .bind(sid)
-      .first()
-
-    if (!student) {
-      return c.json({ message: "ไม่พบนักศึกษา" }, 400)
-    }
-
-    // 🔑 ตรวจ code
-    const validCode = await c.env.DB
-      .prepare(`
-        SELECT id
-        FROM attendance_code
+        FROM attendance_session
         WHERE code = ?
         AND expires_at > datetime('now','+7 hours')
       `)
       .bind(code)
       .first()
 
-    if (!validCode) {
+    if (!session) {
       return c.json({ message: "รหัสไม่ถูกต้องหรือหมดอายุ" }, 400)
     }
 
-    // 🚫 กันเช็คชื่อซ้ำ
+    // ❌ เช็คว่าซ้ำไหม
     const already = await c.env.DB
       .prepare(`
         SELECT 1
         FROM attendance
-        WHERE student_id = ? AND code = ?
+        WHERE session_id = ? AND student_id = ?
       `)
-      .bind(sid, code)
+      .bind(session.id, sid)
       .first()
 
     if (already) {
       return c.json({ message: "คุณเช็คชื่อไปแล้ว" }, 400)
     }
 
-    // ✅ บันทึก
+    // ✅ บันทึกการเช็คชื่อ
     await c.env.DB
       .prepare(`
-        INSERT INTO attendance (student_id, code)
+        INSERT INTO attendance (session_id, student_id)
         VALUES (?, ?)
       `)
-      .bind(sid, code)
+      .bind(session.id, sid)
       .run()
 
     return c.json({ success: true, message: "เช็คชื่อสำเร็จ ✅" })
   } catch (err) {
-    console.error("CHECKIN ERROR:", err)
-    return c.json({ message: "เกิดข้อผิดพลาด" }, 500)
+    console.error(err)
+    return c.json({ message: "Internal Server Error" }, 500)
   }
 })
 
 /* ======================================================
-   📋 ตารางรายชื่อ
+   📋 ตารางรายชื่อ (แยกตามอาจารย์)
 ====================================================== */
-attendance.get("/list", async (c) => {
+attendance.get("/list/:teacherId", async (c) => {
   try {
+    const teacherId = Number(c.req.param("teacherId"))
     const dateParam = c.req.query("date")
     let date = (Array.isArray(dateParam) ? dateParam[0] : dateParam)?.trim()
 
-    if (date === "all") {
-      const rows = await c.env.DB
-        .prepare(`
-          SELECT
-            a.id AS attendance_id,
-            s.fullname,
-            s.student_code,
-            a.checked_at
-          FROM attendance a
-          JOIN students s ON a.student_id = s.id
-          ORDER BY a.checked_at DESC
-        `)
-        .all()
-
-      return c.json({ students: rows.results })
-    }
-
     if (!date) {
       const row = await c.env.DB
-        .prepare("SELECT date('now','+7 hours') AS today")
+        .prepare(`SELECT date('now','+7 hours') AS today`)
         .first()
       date = row?.today
     }
@@ -197,11 +182,13 @@ attendance.get("/list", async (c) => {
           s.student_code,
           a.checked_at
         FROM attendance a
+        JOIN attendance_session se ON a.session_id = se.id
         JOIN students s ON a.student_id = s.id
-        WHERE date(a.checked_at) = ?
+        WHERE se.teacher_id = ?
+        AND date(a.checked_at) = ?
         ORDER BY a.checked_at DESC
       `)
-      .bind(date)
+      .bind(teacherId, date)
       .all()
 
     return c.json({ students: rows.results })
@@ -212,65 +199,36 @@ attendance.get("/list", async (c) => {
 })
 
 /* ======================================================
-   🗑️ ลบรายการเช็คชื่อ
-====================================================== */
-attendance.delete("/:id", async (c) => {
-  const id = Number(c.req.param("id"))
-
-  if (!Number.isFinite(id)) {
-    return c.json({ message: "id ไม่ถูกต้อง" }, 400)
-  }
-
-  const result = await c.env.DB
-    .prepare(`DELETE FROM attendance WHERE id = ?`)
-    .bind(id)
-    .run()
-
-  if (result.meta.changes === 0) {
-    return c.json({ message: "ไม่พบข้อมูล" }, 404)
-  }
-
-  return c.json({ message: "ลบสำเร็จ" })
-})
-
-/* ======================================================
    📥 Export CSV
 ====================================================== */
-attendance.get("/export", async (c) => {
+attendance.get("/export/:teacherId", async (c) => {
   try {
+    const teacherId = Number(c.req.param("teacherId"))
     const dateParam = c.req.query("date")
     let date = (Array.isArray(dateParam) ? dateParam[0] : dateParam)?.trim()
 
-    let rows
-
-    if (date === "all") {
-      rows = await c.env.DB
-        .prepare(`
-          SELECT s.fullname, s.student_code, a.checked_at
-          FROM attendance a
-          JOIN students s ON a.student_id = s.id
-          ORDER BY a.checked_at DESC
-        `)
-        .all()
-    } else {
-      if (!date) {
-        const row = await c.env.DB
-          .prepare("SELECT date('now','+7 hours') AS today")
-          .first()
-        date = row?.today
-      }
-
-      rows = await c.env.DB
-        .prepare(`
-          SELECT s.fullname, s.student_code, a.checked_at
-          FROM attendance a
-          JOIN students s ON a.student_id = s.id
-          WHERE date(a.checked_at) = ?
-          ORDER BY a.checked_at DESC
-        `)
-        .bind(date)
-        .all()
+    if (!date) {
+      const row = await c.env.DB
+        .prepare(`SELECT date('now','+7 hours') AS today`)
+        .first()
+      date = row?.today
     }
+
+    const rows = await c.env.DB
+      .prepare(`
+        SELECT
+          s.fullname,
+          s.student_code,
+          a.checked_at
+        FROM attendance a
+        JOIN attendance_session se ON a.session_id = se.id
+        JOIN students s ON a.student_id = s.id
+        WHERE se.teacher_id = ?
+        AND date(a.checked_at) = ?
+        ORDER BY a.checked_at DESC
+      `)
+      .bind(teacherId, date)
+      .all()
 
     let csv = "ชื่อ-นามสกุล,รหัสนักศึกษา,เวลาเช็คชื่อ\n"
     rows.results.forEach((r: any) => {
@@ -280,8 +238,8 @@ attendance.get("/export", async (c) => {
     return c.body(csv, {
       headers: {
         "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename=attendance-${date ?? "all"}.csv`,
-      },
+        "Content-Disposition": `attachment; filename=attendance-${date}.csv`
+      }
     })
   } catch (err) {
     console.error(err)

@@ -1,11 +1,13 @@
-CREATE TABLE IF NOT EXISTS users (
+-- ผู้ใช้
+CREATE TABLE users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT UNIQUE,
   password TEXT,
   role TEXT
 );
 
-CREATE TABLE IF NOT EXISTS students (
+-- นักศึกษา
+CREATE TABLE students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER,
   fullname TEXT,
@@ -13,18 +15,22 @@ CREATE TABLE IF NOT EXISTS students (
   FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS attendance_code (
+-- 👨‍🏫 คาบเรียน / session
+CREATE TABLE attendance_session (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  code TEXT,
   teacher_id INTEGER,
+  code TEXT,
   expires_at DATETIME,
+  created_at DATETIME DEFAULT (datetime('now','+7 hours')),
   FOREIGN KEY(teacher_id) REFERENCES users(id)
 );
 
-CREATE TABLE IF NOT EXISTS attendance (
+-- 👨‍🎓 การเช็คชื่อ
+CREATE TABLE attendance (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER,
   student_id INTEGER,
-  code TEXT,
-  checked_at DATETIME DEFAULT (datetime('now', '+7 hours')),
-  FOREIGN KEY(student_id) REFERENCES users(id)
+  checked_at DATETIME DEFAULT (datetime('now','+7 hours')),
+  FOREIGN KEY(session_id) REFERENCES attendance_session(id),
+  FOREIGN KEY(student_id) REFERENCES students(id)
 );
