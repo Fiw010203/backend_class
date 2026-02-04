@@ -90,51 +90,42 @@ auth.post("/register", async (c) => {
 
 /* ================= LOGIN ================= */
 auth.post("/login", async (c) => {
+  // parse and normalize
+  const body = await c.req.json().catch(() => ({}))
+  const uname = (body.username || "").toString().trim()
+  const pwd = (body.password || "").toString()
+
+  if (!uname || !pwd) {
+    return c.json({ success: false, message: "กรุณากรอก Username และ Password" }, 400)
+  }
+
+  const db = getDb(c)
+  if (!db) {
+    console.error("LOGIN ERROR: DB not available")
+    return c.json({ success: false, message: "Database not available" }, 500)
+  }
+
   try {
-    const { username, password } = await c.req.json()
-
-    if (!username || !password) {
-      return c.json(
-        { message: "กรุณากรอก Username และ Password" },
-        400
-      )
-    }
-
-    const db = getDb(c)
-    if (!db) {
-      console.error("LOGIN ERROR: DB not available")
-      return c.json(
-        { message: "Database not available" },
-        500
-      )
-    }
-
     const user = await db
       .prepare(
         `SELECT id, username, role
          FROM users
          WHERE username = ? AND password = ?`
       )
-      .bind(username.trim(), password)
+      .bind(uname, pwd)
       .first()
 
     if (!user) {
-      return c.json(
-        { message: "Username หรือ Password ไม่ถูกต้อง" },
-        401
-      )
+      return c.json({ success: false, message: "Username หรือ Password ไม่ถูกต้อง" }, 401)
     }
 
-    return c.json({
-      success: true,
-      user
-    })
-  } catch (err) {
+    // normalize role and return
+    user.role = (user.role || "").toString().toLowerCase()
+
+    return c.json({ success: true, user })
+  } catch (err: any) {
     console.error("LOGIN ERROR:", err)
-    return c.json(
-      { message: "Login error" },
-      500
-    )
+    return c.json({ success: false, message: err?.message || "Login error" }, 500)
   }
 })
 
