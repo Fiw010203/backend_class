@@ -1,79 +1,105 @@
 import { Hono } from "hono"
 
-const auth = new Hono()
-const getDb = (c: any) => c.env?.my_db
+type Env = {
+  DB: D1Database
+}
 
-// REGISTER
+const auth = new Hono<{ Bindings: Env }>()
+
+// ================= REGISTER =================
 auth.post("/register", async (c) => {
   try {
-    const { username, password, role, fullname, student_code } = await c.req.json()
-    const db = getDb(c)
-    // ตรวจสอบข้อมูลที่จำเป็น
+    const { username, password, role, fullname, student_code } =
+      await c.req.json()
+
     if (!username || !password || !role) {
       return c.json({ success: false, message: "ข้อมูลไม่ครบ" }, 400)
     }
 
-    // normalize role ให้รองรับทั้งภาษาอังกฤษและไทย
+    // normalize role
     let normalizedRole = role.toLowerCase()
     if (normalizedRole === "นักศึกษา") normalizedRole = "student"
     if (normalizedRole === "อาจารย์") normalizedRole = "teacher"
 
-    // Validate role (must be either student or teacher)
     if (normalizedRole !== "student" && normalizedRole !== "teacher") {
       return c.json({ success: false, message: "Role ไม่ถูกต้อง" }, 400)
     }
 
     // ตรวจสอบ username ซ้ำ
-    const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(username)
+    const exists = await c.env.DB
+      .prepare("SELECT id FROM users WHERE username = ?")
+      .bind(username)
+      .first()
+
     if (exists) {
       return c.json({ success: false, message: "Username ซ้ำ" }, 400)
     }
 
-    // บันทึกลงตาราง users (ไม่มี fullname)
-    const result = db.prepare(`
-      INSERT INTO users (username, password, role)
-      VALUES (?, ?, ?)
-    `).run(username, password, normalizedRole)
+    // insert users
+    const result = await c.env.DB
+      .prepare(
+        `INSERT INTO users (username, password, role)
+         VALUES (?, ?, ?)`
+      )
+      .bind(username, password, normalizedRole)
+      .run()
 
-    const userId = result.lastInsertRowid
+    const userId = result.meta.last_row_id
 
-    // ถ้า role เป็น student → บันทึกลงตาราง students
+    // ถ้าเป็น student → insert students
     if (normalizedRole === "student") {
-      db.prepare(`
-        INSERT INTO students (user_id, fullname, student_code)
-        VALUES (?, ?, ?)
-      `).run(userId, fullname || username, student_code || null)
+      await c.env.DB
+        .prepare(
+          `INSERT INTO students (user_id, fullname, student_code)
+           VALUES (?, ?, ?)`
+        )
+        .bind(
+          userId,
+          fullname || username,
+          student_code || null
+        )
+        .run()
     }
 
     return c.json({ success: true, message: "สมัครสำเร็จ ✅" })
   } catch (err) {
     console.error("❌ REGISTER ERROR:", err)
-    return c.json({ success: false, message: "เกิดข้อผิดพลาดในการสมัคร" }, 500)
+    return c.json(
+      { success: false, message: "เกิดข้อผิดพลาดในการสมัคร" },
+      500
+    )
   }
 })
 
-// LOGIN
+// ================= LOGIN =================
 auth.post("/login", async (c) => {
   try {
     const { username, password } = await c.req.json()
-    const db = getDb(c)
-    const user = db.prepare(`
-      SELECT id, username, role
-      FROM users
-      WHERE username = ? AND password = ?
-    `).get(username, password)
+
+    const user = await c.env.DB
+      .prepare(
+        `SELECT id, username, role
+         FROM users
+         WHERE username = ? AND password = ?`
+      )
+      .bind(username, password)
+      .first()
 
     if (!user) {
-      return c.json({ success: false, message: "Username หรือ Password ไม่ถูกต้อง" }, 401)
+      return c.json(
+        { success: false, message: "Username หรือ Password ไม่ถูกต้อง" },
+        401
+      )
     }
 
     return c.json({ success: true, user })
   } catch (err) {
     console.error("❌ LOGIN ERROR:", err)
-    return c.json({ success: false, message: "เกิดข้อผิดพลาดในการเข้าสู่ระบบ" }, 500)
+    return c.json(
+      { success: false, message: "เกิดข้อผิดพลาดในการเข้าสู่ระบบ" },
+      500
+    )
   }
 })
-
-
 
 export default auth
