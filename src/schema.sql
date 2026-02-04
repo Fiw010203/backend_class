@@ -1,53 +1,30 @@
--- USERS
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT UNIQUE NOT NULL,
-  password TEXT NOT NULL,
-  role TEXT NOT NULL
+  username TEXT UNIQUE,
+  password TEXT,
+  role TEXT
 );
 
--- STUDENTS
 CREATE TABLE IF NOT EXISTS students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER NOT NULL,
-  fullname TEXT NOT NULL,
-  student_code TEXT UNIQUE,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  user_id INTEGER,
+  fullname TEXT,
+  student_code TEXT,
+  FOREIGN KEY(user_id) REFERENCES users(id)
 );
 
--- ATTENDANCE CODE (อาจารย์สร้างโค้ดเช็คชื่อ)
 CREATE TABLE IF NOT EXISTS attendance_code (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  code TEXT NOT NULL,
-  teacher_id INTEGER NOT NULL,
-  expires_at TEXT,
-  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
+  code TEXT,
+  teacher_id INTEGER,
+  expires_at DATETIME,
+  FOREIGN KEY(teacher_id) REFERENCES users(id)
 );
 
--- ATTENDANCE (นักศึกษาเช็คชื่อ)
 CREATE TABLE IF NOT EXISTS attendance (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  student_id INTEGER NOT NULL,
-  code TEXT NOT NULL,
-  checked_at TEXT DEFAULT (datetime('now', '+7 hours')),
-  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+  student_id INTEGER,
+  code TEXT,
+  checked_at DATETIME DEFAULT (datetime('now', '+7 hours')),
+  FOREIGN KEY(student_id) REFERENCES users(id)
 );
-
--- ITEMS (CRUD ตัวอย่าง)
-CREATE TABLE IF NOT EXISTS items (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT NOT NULL,
-  description TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
--- TRIGGER อัปเดต updated_at อัตโนมัติ
-CREATE TRIGGER IF NOT EXISTS items_updated_at
-AFTER UPDATE ON items
-FOR EACH ROW
-BEGIN
-  UPDATE items
-  SET updated_at = CURRENT_TIMESTAMP
-  WHERE id = OLD.id;
-END;
