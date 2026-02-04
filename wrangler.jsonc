@@ -3,13 +3,11 @@
 	"name": "backend-cw",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-12-19",
-	"d1_databases": [
-		{
-			"binding": "my_db",
-			"database_name": "my-db",
-			"database_id": "67c9b4ba-cdb3-4ab4-88f4-f83558db87fe",
-		}
-	]
+	"d1_databases": [{
+		"binding": "DB",
+		"database_name": "my_db",
+		"database_id": "097c66c7-d49d-491a-a14d-ad93a28220b2"
+	}]
 	// "compatibility_flags": [
 	//   "nodejs_compat"
 	// ],

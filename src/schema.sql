@@ -1,14 +1,48 @@
--- items table for basic CRUD
+-- USERS
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL,
+  role TEXT NOT NULL
+);
 
+-- STUDENTS
+CREATE TABLE IF NOT EXISTS students (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL,
+  fullname TEXT NOT NULL,
+  student_code TEXT UNIQUE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ATTENDANCE CODE (อาจารย์สร้างโค้ดเช็คชื่อ)
+CREATE TABLE IF NOT EXISTS attendance_code (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL,
+  teacher_id INTEGER NOT NULL,
+  expires_at TEXT,
+  FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ATTENDANCE (นักศึกษาเช็คชื่อ)
+CREATE TABLE IF NOT EXISTS attendance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  checked_at TEXT DEFAULT (datetime('now', '+7 hours')),
+  FOREIGN KEY (student_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- ITEMS (CRUD ตัวอย่าง)
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT NOT NULL,
   description TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
--- optional trigger to auto-update updated_at
+-- TRIGGER อัปเดต updated_at อัตโนมัติ
 CREATE TRIGGER IF NOT EXISTS items_updated_at
 AFTER UPDATE ON items
 FOR EACH ROW
