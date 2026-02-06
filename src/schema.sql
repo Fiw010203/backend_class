@@ -9,10 +9,13 @@ CREATE TABLE users (
 -- นักศึกษา
 CREATE TABLE students (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id INTEGER,
+  user_id INTEGER, -- FK ไป users.id
   fullname TEXT,
   student_code TEXT,
-  FOREIGN KEY(user_id) REFERENCES users(id)
+  teacher_id INTEGER,
+  UNIQUE(student_code, teacher_id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (teacher_id) REFERENCES users(id)
 );
 
 -- 👨‍🏫 คาบเรียน / session
