@@ -109,11 +109,12 @@ attendance.post("/checkin", async (c) => {
     const { studentId, code } = await c.req.json()
     const sid = Number(studentId)
 
+    // 1️⃣ validate input
     if (!Number.isFinite(sid) || !code) {
       return c.json({ message: "ข้อมูลไม่ถูกต้อง" }, 400)
     }
 
-    // 🔎 หา session + teacher_id
+    // 2️⃣ หา session ที่ยังไม่หมดอายุ
     const session = await c.env.DB
       .prepare(`
         SELECT id, teacher_id
@@ -128,7 +129,7 @@ attendance.post("/checkin", async (c) => {
       return c.json({ message: "รหัสไม่ถูกต้องหรือหมดอายุ" }, 400)
     }
 
-    // ⭐ เช็คว่านิสิตอยู่ในตารางอาจารย์คนนี้ไหม
+    // 3️⃣ เช็คว่านิสิต (students.id) อยู่ในคลาสอาจารย์คนนี้จริงไหม
     const student = await c.env.DB
       .prepare(`
         SELECT id
@@ -146,12 +147,13 @@ attendance.post("/checkin", async (c) => {
       )
     }
 
-    // ❌ เช็คว่าซ้ำไหม
+    // 4️⃣ เช็คว่าซ้ำหรือยัง
     const already = await c.env.DB
       .prepare(`
         SELECT 1
         FROM attendance
-        WHERE session_id = ? AND student_id = ?
+        WHERE session_id = ?
+        AND student_id = ?
       `)
       .bind(session.id, sid)
       .first()
@@ -160,21 +162,25 @@ attendance.post("/checkin", async (c) => {
       return c.json({ message: "คุณเช็คชื่อไปแล้ว" }, 400)
     }
 
-    // ✅ บันทึกการเช็คชื่อ
+    // 5️⃣ บันทึกการเช็คชื่อ
     await c.env.DB
       .prepare(`
-        INSERT INTO attendance (session_id, student_id)
-        VALUES (?, ?)
+        INSERT INTO attendance (session_id, student_id, status)
+        VALUES (?, ?, 'present')
       `)
       .bind(session.id, sid)
       .run()
 
-    return c.json({ success: true, message: "เช็คชื่อสำเร็จ ✅" })
+    return c.json({
+      success: true,
+      message: "เช็คชื่อสำเร็จ ✅"
+    })
   } catch (err) {
-    console.error(err)
+    console.error("CHECKIN ERROR:", err)
     return c.json({ message: "Internal Server Error" }, 500)
   }
 })
+
 
 /* ======================================================
    📥 Export CSV
@@ -266,25 +272,44 @@ attendance.post("/students/import", async (c) => {
       const [student_code, fullname] = line.split(",")
       if (!student_code || !fullname) continue
 
-      // 1️⃣ upsert students (แก้ conflict ให้ถูก)
-      const result = await c.env.DB.prepare(`
-        INSERT INTO students (student_code, fullname, teacher_id)
-        VALUES (?, ?, ?)
-        ON CONFLICT(student_code, teacher_id)
-        DO UPDATE SET fullname = excluded.fullname
-        RETURNING id
+      // 🔎 1. หา student ที่สมัครไว้ก่อน
+      const existing = await c.env.DB.prepare(`
+        SELECT id
+        FROM students
+        WHERE student_code = ?
       `)
-        .bind(
-          student_code.trim(),
-          fullname.trim(),
-          teacherId
-        )
+        .bind(student_code.trim())
         .first()
 
-      const studentId = result?.id
+      let studentId: number | undefined
+
+      if (existing) {
+        // ✅ 2. มีแล้ว → update teacher_id
+        await c.env.DB.prepare(`
+          UPDATE students
+          SET fullname = ?, teacher_id = ?
+          WHERE id = ?
+        `)
+          .bind(fullname.trim(), teacherId, existing.id)
+          .run()
+
+        studentId = existing.id
+      } else {
+        // ➕ 3. ไม่มี → insert ใหม่
+        const result = await c.env.DB.prepare(`
+          INSERT INTO students (student_code, fullname, teacher_id)
+          VALUES (?, ?, ?)
+          RETURNING id
+        `)
+          .bind(student_code.trim(), fullname.trim(), teacherId)
+          .first()
+
+        studentId = result?.id
+      }
+
       if (!studentId) continue
 
-      // 2️⃣ สร้าง attendance = absent ถ้ายังไม่มี (สำคัญมาก)
+      // 📋 4. สร้าง attendance = absent (กันซ้ำ)
       await c.env.DB.prepare(`
         INSERT OR IGNORE INTO attendance (student_id, session_id, status)
         SELECT ?, se.id, 'absent'
@@ -299,14 +324,13 @@ attendance.post("/students/import", async (c) => {
 
     return c.json({
       success: true,
-      message: `นำเข้า/อัปเดต ${processed} คน สำเร็จ`
+      message: `นำเข้า ${processed} คน สำเร็จ`
     })
   } catch (err) {
     console.error("IMPORT ERROR:", err)
     return c.json({ message: "Import failed" }, 500)
   }
 })
-
 
 
 /* ======================================================
@@ -328,6 +352,8 @@ attendance.get("/list/:teacherId", async (c) => {
     const rows = await c.env.DB.prepare(
       `
       SELECT
+        s.id AS student_id,
+        s.user_id,
         s.fullname,
         s.student_code,
         a.attendance_id,
@@ -389,6 +415,58 @@ attendance.put("/:attendanceId", async (c) => {
     return c.json({ message: "แก้ไขไม่สำเร็จ" }, 500);
   }
 });
+
+/* ======================================================
+   ❌ ถอนรายชื่อนักเรียนออกจากคลาส
+====================================================== */
+attendance.delete("/student/:studentId", async (c) => {
+  try {
+    const studentId = Number(c.req.param("studentId"))
+    if (!studentId) {
+      return c.json({ message: "studentId ไม่ถูกต้อง" }, 400)
+    }
+
+    // 🔎 หา teacher_id ก่อน (กันลบมั่ว)
+    const student = await c.env.DB.prepare(`
+      SELECT teacher_id
+      FROM students
+      WHERE id = ?
+    `)
+      .bind(studentId)
+      .first()
+
+    if (!student?.teacher_id) {
+      return c.json({ message: "นักเรียนไม่ได้อยู่ในคลาสใด" }, 400)
+    }
+
+    const teacherId = student.teacher_id
+
+    // 1️⃣ ลบ attendance เฉพาะของอาจารย์คนนี้
+    await c.env.DB.prepare(`
+      DELETE FROM attendance
+      WHERE student_id = ?
+      AND session_id IN (
+        SELECT id FROM attendance_session WHERE teacher_id = ?
+      )
+    `)
+      .bind(studentId, teacherId)
+      .run()
+
+    // 2️⃣ ถอนออกจากคลาส (ไม่ลบ user)
+    await c.env.DB.prepare(`
+      UPDATE students
+      SET teacher_id = NULL
+      WHERE id = ?
+    `)
+      .bind(studentId)
+      .run()
+
+    return c.json({ message: "ถอนรายชื่อนักเรียนออกจากคลาสแล้ว" })
+  } catch (err) {
+    console.error(err)
+    return c.json({ message: "ถอนรายชื่อไม่สำเร็จ" }, 500)
+  }
+})
 
 
 export default attendance;
